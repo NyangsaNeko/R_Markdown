@@ -1,0 +1,331 @@
+---
+title: "재료물성 데이터 분석 및 경도 예측"
+author: "Yeongjun Choi"
+date: "2024-08-03"
+output: html_document
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+```
+
+#### library
+```{r}
+library(dplyr)
+library(keras)
+library(tensorflow)
+library(corrplot)
+library(plotly)
+```
+
+#### tensorflow cpu 사용
+```{r}
+tf$config$set_visible_devices(list(), "GPU")
+tf$config$list_physical_devices()
+```
+
+#### 데이터 불러오기
+```{r}
+hardness_data_set_tr = read.csv('Hardness data set_tr.csv')
+hardness_data_set_val = read.csv('Hardness data set_val.csv')
+```
+
+#### 데이터 확인
+```{r}
+hardness_data_set_tr %>% str()
+hardness_data_set_val %>% str()
+```
+
+#### 결측치 확인
+```{r}
+table(is.na(hardness_data_set_tr)); table(is.na(hardness_data_set_val))
+```
+
+#### 결측치 위치
+```{r include=FALSE}
+for(i in 1:ncol(hardness_data_set_val)){
+  print(i)
+  print(which(is.na(hardness_data_set_val[,i])))
+}
+```
+
+#### 제거
+```{r}
+hardness_data_set_val = hardness_data_set_val[-c(101:199),]
+```
+
+#### summary
+```{r}
+hardness_data_set_tr %>% summary()
+hardness_data_set_val %>% summary()
+```
+
+#### 상관계수 그래프
+ * 훈련 데이터의  Mn과 Si는 모두 0값이므로 제외
+```{r}
+cor_data = cor(hardness_data_set_tr[,c(2:26)][,-c(13:14)], method = 'pearson')
+cor_data %>% corrplot(method = 'number')
+```
+
+#### box_그래프
+```{r}
+names_list = names(hardness_data_set_tr[,c(2:26)])
+```
+
+#### 훈련데이터의 box그래프
+```{r}
+tr_fig = plot_ly(y = hardness_data_set_tr[,2], type = 'box', quartilemethod="linear", name = names_list[1])
+
+j = 2
+for(i in 3:26){
+  tr_fig = 
+    tr_fig %>% 
+    add_trace(y = hardness_data_set_tr[,i], type = 'box', quartilemethod="linear", name = names_list[j])
+  
+  j = j +1
+}
+tr_fig
+```
+
+#### 검증데이터의 box그래프
+```{r}
+val_fig = plot_ly(y = hardness_data_set_val[,2], type = 'box', quartilemethod="linear", name = names_list[1])
+
+j = 2
+for(i in 3:26){
+  val_fig = 
+    val_fig %>% 
+    add_trace(y = hardness_data_set_val[,i], type = 'box', quartilemethod="linear", name = names_list[j])
+  
+  j = j +1
+}
+val_fig
+```
+
+ * XY값 기준 min(-45) ~ max(45) 이므로 XY 좌표값은 0~1사이로 정규화
+ * 조성물성의 비율(0~100%)또한 0~1사이로 정규화
+ * 나머지는 훈련데이터의 min, max값으로 정규화
+```{r}
+sel_hardness_data_set_tr = hardness_data_set_tr[,c(2:26)]
+sel_hardness_data_set_val = hardness_data_set_val[,c(2:26)]
+
+max_pos = 45 *2; min_pos = 0
+sel_hardness_data_set_tr$X = sel_hardness_data_set_tr$X +45; sel_hardness_data_set_tr$Y = sel_hardness_data_set_tr$Y +45; 
+sel_hardness_data_set_tr$X = (sel_hardness_data_set_tr$X -min_pos)/(max_pos -min_pos)
+sel_hardness_data_set_tr$Y = (sel_hardness_data_set_tr$Y -min_pos)/(max_pos -min_pos)
+
+sel_hardness_data_set_val$X = sel_hardness_data_set_val$X +45; sel_hardness_data_set_val$Y = sel_hardness_data_set_val$Y +45; 
+sel_hardness_data_set_val$X = (sel_hardness_data_set_val$X -min_pos)/(max_pos -min_pos)
+sel_hardness_data_set_val$Y = (sel_hardness_data_set_val$Y -min_pos)/(max_pos -min_pos)
+
+sel_hardness_data_set_tr[,3:17] = sel_hardness_data_set_tr[,3:17] *0.01
+sel_hardness_data_set_val[,3:17] = sel_hardness_data_set_val[,3:17] *0.01
+
+for(i in 18:ncol(sel_hardness_data_set_tr)){
+  max_value = max(sel_hardness_data_set_tr[,i])
+  min_value = min(sel_hardness_data_set_tr[,i])
+  
+  sel_hardness_data_set_tr[,i] = (sel_hardness_data_set_tr[,i] -min_value)/(max_value -min_value)
+  sel_hardness_data_set_val[,i] = (sel_hardness_data_set_val[,i] -min_value)/(max_value -min_value)
+}
+
+summary(sel_hardness_data_set_tr); summary(sel_hardness_data_set_val)
+```
+
+#### 결측치 확인
+```{r}
+table(is.na(sel_hardness_data_set_tr)); table(is.na(sel_hardness_data_set_val))
+```
+
+#### 정규화된 bar그래프
+```{r}
+sel_name_list = names(sel_hardness_data_set_tr)
+nor_fig_tr = plot_ly(y = sel_hardness_data_set_tr[,1], type = 'box', quartilemethod="linear", name = sel_name_list[1])
+nor_fig_val = plot_ly(y = sel_hardness_data_set_val[,1], type = 'box', quartilemethod="linear", name = sel_name_list[1])
+for(i in 2:(ncol(sel_hardness_data_set_tr) -0) ){
+  nor_fig_tr = 
+    nor_fig_tr %>% 
+    add_trace(y = sel_hardness_data_set_tr[,i], type = 'box', quartilemethod="linear", name = sel_name_list[i])
+  
+  nor_fig_val = 
+    nor_fig_val %>% 
+    add_trace(y = sel_hardness_data_set_val[,i], type = 'box', quartilemethod="linear", name = sel_name_list[i])
+}
+nor_fig_tr
+nor_fig_val
+```
+
+#### 데이터셋을 행렬로 변환
+```{r}
+x_train = as.matrix(sel_hardness_data_set_tr[,-c(19)])
+y_train = matrix(sel_hardness_data_set_tr$Hardness, ncol = 1)
+
+x_val = as.matrix(sel_hardness_data_set_val[,-c(19)])
+y_val = matrix(sel_hardness_data_set_val$Hardness, ncol = 1)
+```
+
+#### 랜덤값 고정
+```{r}
+set.seed(7)
+tf$random$set_seed(7)
+```
+
+#### 기본 파라미터
+```{r}
+act = 'selu'
+batch.size = 32
+```
+
+#### 모델생성
+ * 단순한 Dual_attention구조의 모델을 사용
+```{r}
+k_clear_session()
+
+input = layer_input(shape = ncol(x_train), name = 'input')
+
+att_layer =
+  input %>%
+  layer_dense(units = ncol(x_train), name = 'att_score') %>%
+  layer_activation_softmax()
+
+mul_layer = layer_multiply(inputs = list(input, att_layer))
+
+hidden = 
+  mul_layer %>% 
+  layer_dense(units = ncol(x_train) *8, activation = act, name = 'hidden_1') %>% 
+  layer_dense(units = ncol(x_train) *4, activation = act, name = 'hidden_2') %>% 
+  layer_dense(units = ncol(x_train), activation = act, name = 'hidden_3')
+
+output_att = layer_multiply(inputs = list(hidden, att_layer))
+
+output = 
+  output_att %>% 
+  layer_dense(units = 1, name = 'output')
+
+simple_att_model = keras_model(inputs = input, outputs = output, name = 'simple_att_model')
+summary(simple_att_model)
+```
+
+#### 모델 plot
+```{r}
+plot(simple_att_model)
+```
+
+#### lr 스케줄러 함수 정의
+```{r}
+lr_schedule = function(epoch, lr) {
+  return(lr * 0.999)
+}
+lr_scheduler <- callback_learning_rate_scheduler(schedule = lr_schedule)
+```
+
+#### early stopping 설정
+```{r}
+early_stopping <- callback_early_stopping(
+  monitor = 'val_loss',
+  patience = 200L,
+  restore_best_weights = TRUE
+)
+```
+
+#### 모델 훈련
+```{r include=FALSE}
+simple_att_model$compile(loss = loss_mean_squared_error, optimizer = optimizer_adam(learning_rate = 0.001))
+
+simple_att_model$fit(
+    x = x_train,
+    y = y_train,
+    epochs = 2000L,
+    batch_size = as.integer(batch.size),
+    verbose = 1L,
+    validation_data = list(x_val, y_val),
+    shuffle = T,
+    callbacks = list(lr_scheduler, early_stopping)
+    )
+```
+
+#### loss 그래프 확인
+```{r}
+loss_history = simple_att_model$history$history
+plot_ly(x = 1:length(loss_history$loss), y = loss_history$loss, type = 'scatter', mode = 'line', name = 'tr_loss') %>% 
+  add_trace(x = 1:length(loss_history$loss), y = loss_history$val_loss, type = 'scatter', mode = 'line', name = 'val_loss')
+```
+
+#### 모델의 R2(결정계수)계산, SSE/SST
+```{r}
+att_model_fitted_value = simple_att_model %>% predict(x_train, batch_size = batch.size)
+SST = sum((y_train -mean(y_train))^2)
+SSE = sum((att_model_fitted_value -mean(y_train))^2)
+print(SSE/SST)
+```
+
+#### 모델이 훈련시 어떤 변수에 가중치를 주었는지 확인
+ * attention score 확인
+```{r}
+att_score_out = keras_model(inputs = input, outputs = att_layer)
+att_score = att_score_out %>% predict(x_val, batch_size = batch.size)
+df_att_score = att_score %>% data.frame()
+names(df_att_score) = sel_name_list[-19]
+```
+
+#### 개별 데어터의 attention score 확인
+ * 랜덤 4개 선별
+```{r}
+row_num = sample(1:nrow(att_score), size = 4); row_num
+att_sc_list = list()
+for(i in 1:4){
+  att_sc_list[[i]] = plot_ly(x = factor(sel_name_list[-19], levels = sel_name_list[-19]), y = att_score[row_num[i],], type = 'bar')
+}
+subplot(att_sc_list[[1]], att_sc_list[[2]], att_sc_list[[3]], att_sc_list[[4]], nrows = 2)
+```
+
+#### 전체 데이터의 attention score 확인
+```{r}
+View_graph = function(graph_data){
+  graph_data = data.frame(graph_data)
+  x = 1:nrow(graph_data)
+  col_num = ncol(graph_data)
+  if(ncol(graph_data) == 1){
+    pl_graph = plot_ly(x = x, y = as.matrix(graph_data[,1])[,1], type = 'scatter', mode = 'markers', name = names(graph_data)[1])
+  }else{
+    pl_graph = plot_ly(x = x, y = as.matrix(graph_data[,1])[,1], type = 'scatter', mode = 'markers', name = names(graph_data)[1])
+    for(i in 2:ncol(graph_data)){
+      pl_graph = pl_graph %>% add_trace(x = x, y = as.matrix(graph_data[,i])[,1], type = 'scatter', mode = 'markers', name = names(graph_data)[i])
+    }
+  }
+  return(pl_graph)
+}
+
+View_graph(df_att_score)
+```
+
+#### 모델 예측
+ * 테스트 데이터로 예측해야 하나 따로 분류하지 않아 검증 데이터로 대체합니다.
+```{r}
+prediction = simple_att_model %>% predict(x_val, batch_size = batch.size)
+```
+
+#### 결과값의 역 정규화
+```{r}
+max_value = max(hardness_data_set_tr$Hardness); min_value = min(hardness_data_set_tr$Hardness)
+y_val = (y_val +min_value) *(max_value -min_value)
+prediction = (prediction +min_value) *(max_value -min_value)
+```
+
+#### histogram 그래프 확인
+```{r}
+fig_hist = plot_ly(alpha = 0.6)
+fig_hist = 
+  fig_hist %>% 
+  add_histogram(x = y_val[,1], name = 'y') %>% 
+  add_histogram(x = prediction[,1], name = 'prediction') %>% 
+  layout(barmode = "overlay")
+fig_hist
+```
+
+#### 실제값과 예측값의 점 그래프 확인
+```{r}
+plot_ly(x = 1:nrow(y_val), y = y_val, type = 'scatter', mode = 'markers', name = 'y') %>% 
+  add_trace(x = 1:nrow(y_val), y = prediction, type = 'scatter', mode = 'markers', name = 'prediction')
+```
+
